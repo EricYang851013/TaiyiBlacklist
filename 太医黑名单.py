@@ -764,6 +764,14 @@ RAW_CAT_DATA = {
 
 NO_CATEGORY_TITLE = "未知药材"
 
+GROUP_MED_NAMES = {
+# 焦三仙是焦山楂、焦麦芽、焦神曲三味药的总称。
+# 这三者皆以焦制入药，且均具有消食化积的功效，
+# 因此，临床上医生常将三药合用并称为"焦三仙"。
+# 常会写成：焦三仙各30克
+'焦三仙': '焦山楂、焦麦芽、焦神曲',
+}
+
 Circled_nums = "①②③④⑤⑥⑦⑧⑨⑩"
 def clean_name(name):
     if len(name)==0: return "EMPTY"
@@ -859,19 +867,19 @@ def find_category(name):
                 if not name.startswith(fix): continue
                 if name[len(fix):] in Entries:
                     results.append((cat, entry, 1))
-                # Don't do fuzzy match after name change
-                #    continue
-                #if name[len(fix):] in entry:
-                #    results.append((cat, entry, 3))
+                    break
+                # do fuzzy match after name change
+                if name[len(fix):] in entry:
+                    results.append((cat, entry, 3))
 
             for fix in PAOZHI_POSTFIX:
                 if not name.endswith(fix): continue
                 if name[:-len(fix)] in Entries:
                     results.append((cat, entry, 1))
-                # Don't do fuzzy match after name change
-                #    continue
-                #if name[:-len(fix)] in entry:
-                #    results.append((cat, entry, 3))
+                    break
+                # do fuzzy match after name change
+                if name[:-len(fix)] in entry:
+                    results.append((cat, entry, 3))
                         
     return results if results else [(NO_CATEGORY_TITLE, name, 0)]
 
@@ -1125,10 +1133,21 @@ class MY_GUI():
         # replace all numbers and delimiters with space
         delimiters = r"[][{}()<>\\/|.,;【】（）、。，；《》]"
         # not_zh = r"[^一-龥]" #chinese characters starts from 一 to 龥
-        re_qty = r"[0-9一二三四五六七八九十半]+[斤两钱分枚个只杯碗升斗克g]"
-        items = re.sub(re_qty, " ", re.sub(delimiters, " ", txt)).split()
+        # it seems re.sub will try the second branch only when the first fails
+        qty = r"[0-9一二三四五六七八九十半]+[斤两钱分枚个只杯碗升斗克g]|[0-9]+"
+        items = re.sub(qty, " ", re.sub(delimiters, " ", txt)).split()
         #items = "".join(c if c not in delimiters else " " for c in txt).split()
         if not items: return self.write_log_to_Text("请输入处方或药材清单。")
+        ## 常会写成：焦三仙各30克，这样药名被解析成'焦三仙各'
+        gits = [it for it in items if it in GROUP_MED_NAMES
+                or (it[-1]=='各' and it[:-1] in GROUP_MED_NAMES)]
+        for it in gits:
+            items.remove(it)
+            if it not in GROUP_MED_NAMES:
+                it = it[:-1] # 药名被解析成'焦三仙各'
+            group = GROUP_MED_NAMES[it].split("、")
+            items.extend(group)
+            self.write_log_to_Text(f'{it}是{GROUP_MED_NAMES[it]}的总称。')
         self.write_log_to_Text("，".join(items))
         cat_msg = ["""==============================
 ###     各药材查询结果     ###
