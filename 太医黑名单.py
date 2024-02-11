@@ -17,12 +17,15 @@
 ##    along with this program; if not, write to the Free Software
 ##    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
+##############################
+ #### BEGIN( MAIN DATA ) ####
+##############################
 
 CAT_DATA_COUNT = {
     "急毒药材": 132, #味
     "慢毒药材": 911, #味
     "不入药材": 556, #原始标注：565 味
-    "乏力药材": 3668 + 7, #原始标注：3568 味
+    "乏力药材": 3668 + 6, #原始标注：3568 味
     "可用药材": 143 + 2, #味
     "如同药材": 301 + 5, #味
 }
@@ -117,7 +120,7 @@ RAW_CAT_DATA = {
 山百部、小百部、山芝麻、山驴骨、山苦荬、山扁豆、山扁豆子、山海棠、山海螺、
 山猫儿、山椒草、山椒根、山葛薯、山慈姑、山慈姑叶、山慈姑花、野慈姑、光慈姑、
 山漆树、山芭蕉子、山铁树叶、山枇杷、山枇杷叶、山枇杷根、山飘儿草、千年健、
-千里光、千层塔、千金藤、川楝子、及已、广东土牛膝、小蒜、小天蒜、小铜锤、
+千里光、千层塔、千金藤、川楝子、及己|及已、广东土牛膝、小蒜、小天蒜、小铜锤、
 小叶杜鹃、小叶枇杷、小肺筋草、小叶双眼龙、小叶蛇总管、飞廉、飞燕草、飞天蠄蟧、
 飞龙掌血、飞龙掌血叶、七角风、一箭球、七叶莲、七里香、八角枫花、八角枫叶、
 八角枫根、九节茶、丁公藤、大血藤、大红袍、大尾摇、大驳骨、大浮萍、大黄茎、
@@ -781,34 +784,63 @@ PAOZHI_PREFIX = ("法","炙","煅","炒",
                 )
 PAOZHI_POSTFIX = ("炭",)
 
-Circled_nums = "①②③④⑤⑥⑦⑧⑨⑩"
-def clean_name(name):
-    if len(name)==0: return "EMPTY"
-    if name[0] in Circled_nums:
-        name = name[1:]
-    if name[-1] == "。":
-        name = name[:-1]
-    return name
+##############################
+  #### END( MAIN DATA ) ####
+##############################
 
-def flatten(ll):
-    for l in ll:
-        if isinstance(l, list):
-            yield from flatten(l)
-        else: yield l
 
+######################################
+ #### BEGIN( DATA PARSING CODE ) ####
+######################################
+
+# Original text has very long lines,
+# it is difficult to edit them,
+# and the diff tool on github won't
+# show the changes when an edited line
+# is too long.
+
+# The following two functions split
+# long lines into shorter ones.
+
+def hardWrap(line, sub, maxlen):
+    start = 0
+    while start + maxlen < len(line):
+        idx = line.rfind(sub, start, start + maxlen)
+        assert idx >= 0 # idx<0 is not acceptable!
+        print( line[start:idx+len(sub)])
+        start = idx+len(sub)
+    if start < len(line): print(  line[start:])
+
+def wrapData():
+    for cat in RAW_CAT_DATA:
+        print(repr(cat), ":'''")
+        for line in RAW_CAT_DATA[cat].split():
+            hardWrap(line, '、', 40)
+            print()
+        print(f"''', # End of {cat}\n")
+
+
+Circled = "①②③④⑤⑥⑦⑧⑨⑩"
 def prepare_raw_data():
+    def split(l, sub):
+        start, find = 0, l.find(sub)
+        while find >= 0:
+            yield l[start:find]
+            start = find+len(sub)
+            find = l.find(sub, start)
+        yield l[start: ]
+
+    def flatten(ll):
+        for l in ll: yield from split(l, '、')
 
     for cat in RAW_CAT_DATA:
-        
-        RAW_CAT_DATA[cat] = [clean_name(name) for name in
-          flatten(n[:-1].split("、") for n in RAW_CAT_DATA[cat].split())]
+        RAW_CAT_DATA[cat] = [name if name else "EMPTY" 
+            for name in flatten(n[1 if n[0] in Circled else 0:-1] 
+            for n in RAW_CAT_DATA[cat].split())]
         
         if len(RAW_CAT_DATA[cat]) !=  CAT_DATA_COUNT[cat]:
             # print(cat, RAW_CAT_DATA[cat]) 
             print(cat, len(RAW_CAT_DATA[cat]), CAT_DATA_COUNT[cat])
-        #min_len = min(len(ee) for ee in RAW_CAT_DATA[cat])
-        #print("min length of entry name:", min_len)
-        #print([ee for ee in RAW_CAT_DATA[cat] if len(ee)==min_len])
             
     nset, count, repeated = set(), 0, {}
     for cat in RAW_CAT_DATA:
@@ -847,6 +879,17 @@ def prepare_raw_data():
 ## 翠羽草 乏力药材 乏力药材
 ## 熊蕨根 乏力药材 乏力药材
 
+
+######################################
+  #### END( DATA PARSING CODE ) ####
+######################################
+
+
+
+#####################################
+ #### BEGIN( DATA QUERY CODE ) ####
+#####################################
+
 def find_category(name):
     results = []
     for cat in RAW_CAT_DATA:
@@ -884,8 +927,14 @@ def find_category(name):
                         
     return results if results else [(NO_CATEGORY_TITLE, name, 0)]
 
+#####################################
+  #### END( DATA QUERY CODE ) ####
+#####################################
 
-#=================  GUI  =======================
+
+#############################
+ #### BEGIN( GUI CODE ) ####
+#############################
 
 from tkinter import *
 import time
@@ -1199,23 +1248,11 @@ class MY_GUI():
         # self.log_data_Text.insert(END, logmsg_in)
         self.log_data_Text.insert(1.0, logmsg_in)
 
-def hardWrap(line, sub, maxlen):
-    start = 0
-    while start + maxlen < len(line):
-        idx = line.rfind(sub, start, start + maxlen)
-        assert idx >= 0 # idx<0 is not acceptable!
-        print( line[start:idx+len(sub)])
-        start = idx+len(sub)
-    if start < len(line): print(  line[start:])
+#############################
+  #### END( GUI CODE ) ####
+#############################
 
-def wrapData():
-    for cat in RAW_CAT_DATA:
-        print(repr(cat), ":'''")
-        for line in RAW_CAT_DATA[cat].split():
-            hardWrap(line, '、', 40)
-            print()
-        print(f"''', # End of {cat}\n")
-    
+
 if __name__ == "__main__":
     # wrapData()
     msgs = prepare_raw_data()
@@ -1224,5 +1261,3 @@ if __name__ == "__main__":
     #父窗口进入事件循环，可以理解为保持窗口运行，否则界面不展示
     window.mainloop()  
     #init_window.destroy()
-
-    
