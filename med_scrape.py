@@ -23,7 +23,7 @@
 ######################################
 import 太医黑名单 as taiyi
 from bs4 import BeautifulSoup
-import requests, time
+import requests, time, re
 
 # extract data from this url:
 # f'http://www.a-hospital.com/w/{med}'
@@ -36,10 +36,21 @@ import requests, time
 IMG_BASE = 'http://p.ayxbk.com/images/thumb/'
 def extract(med):
     url = f'http://www.a-hospital.com/w/{med}'
-    res = requests.get(url).text
-    soup = BeautifulSoup(res, 'html.parser')
-    title = soup.find(id='firstHeading').text
-    if "页面没找到！" in title: return
+    for i in range(3):
+        try: res = requests.get(url)
+        except requests.exceptions.Timeout:
+            time.sleep(20)
+            continue #retry
+        if res.status_code == 200: break
+        return # all other status_code,
+               # 404: title is "页面没找到！"
+    else: return # after failing 3 times
+    soup = BeautifulSoup(res.text, 'html.parser')
+    title = soup.find(id='firstHeading')
+    if not title:
+        print(f"\n {med}: 没有发现firstHeading!")
+        return
+    title = title.text
     if title != med: # wrong page
         print(f"\n   查找“{med}”却得到“{title}”！")
         # 仍然收集信息，但以后可以发现该错误
@@ -114,6 +125,8 @@ def para_extract(soup, title):
         find = kwd.find('-')
         if find > 0: kwd=kwd[:find]
         kwd = kwd.replace(" ", '')
+        kwd = kwd.replace("、", '') #e.g. 元参
+        kwd = kwd.replace("性位", '性味') #e.g. 元参
         if kwd in EXCLUDED_KEYS: continue
         text = text[cind+1:].strip()
         if text and len(kwd) <= 9:
@@ -159,7 +172,7 @@ def table_extract(table, title):
 
 def printData(medict, fout):
     cols = ['药材名', '别名', '性味', '归经', '功效作用', '英文名']
-    kwds = {'别名': ["处方名","异名"], "功效": ["功效作用","功效与作用"],}
+    kwds = {'别名': ["处方名","异名"], "功效作用": ["功效","通用","功效与作用"],}
     print(f"| {' | '.join(cols)} |", file=fout) # table headers
     print(f"| {' | '.join('---' for c in cols)} |", file=fout)
     for med in medict:
@@ -201,11 +214,17 @@ def save_web(medict, file):
 
     print(f'\nData saved to files: "{file}.py" and "{file}.md"')
 
-def scrape_and_save(CATS, file = 'medict'):
+def scrape_and_save(CATS, medone=None, file = 'medict'):
     global medict
-    medict, prev_len = {}, 0 
+    if medone is None: # no previous work
+        medict = {} # start fresh
+    prev_len = len(medict)
     for cat in CATS:
         for meds in CATS[cat]:
+            if medone: # previous work done
+                if medone == meds: # til meds 
+                    medone = None
+                continue
             scrape_web(meds, medict)
             if len(medict) > prev_len + 200:
                 save_web(medict, file)
@@ -217,14 +236,63 @@ def scrape_and_save(CATS, file = 'medict'):
     # 别名是否有重复？
     # 性味是否和毒性重复？
 
+def alias_enum(dd):
+    for key in ('别名', "处方名", "异名"):
+        if key not in dd: continue
+        for ali in re.sub(r'\([^)]+\)|（[^）]+）|《[^》]+》|[.,、，。]',
+                     ' ', dd[key]).split():
+            yield ali
+
+def check_duplications(medict):
+    medseen, aliseen = {}, {}
+    for kk, dd in medict.items():
+        med = dd['药材名']
+        kd = kk if kk == med else f"{med}<={kk}"
+        if med in medseen:
+            #print("已有药材名：{kd}")
+            medseen[med].append(kk)
+            continue
+        medseen[med]=[kk]
+        for ali in alias_enum(dd):
+            if ali == med: continue
+            if ali in aliseen:
+                if med not in aliseen[ali]: 
+                    #print(f"重复的别名：{ali} [{kd}]")
+                    aliseen[ali].append(med)
+            else: aliseen[ali] = [med]
+                
+    input(f"别名数: {len(aliseen)}. 药材数 {len(medseen)}")
+    count = 0
+    for ali, ml in aliseen.items():
+        if len(ml)>1:
+            print(ali, ml)
+        count += len(ml) - 1
+    print("Duplications:", count)
+
+    input("太医黑名单中因为重定向而被多次访问的药名：")
+    count = 0
+    for med, kl in medseen.items():
+        count += len(kl) - 1
+        if len(kl)<2: continue
+        print(med, kl)
+        # check consistency
+        for kk in kl:
+            if kk == med: continue
+            for ali in alias_enum(medict[kk]):
+                if med == ali: break
+            else: print(f"Bad redirection: {kk} => {med}")
+    print("Duplications:", count)
+
 
 ######################################
   #### END( WEB SCRAPING CODE ) ####
 ######################################
 
 def test_extract():
-    for med in ('葱白', "厚朴", "川朴", "羊踯躅", '禹白附',
-                '半支莲','半边莲'):
+    #【药 材 名】白牛胆【英 文 名】Sheepear Inula Her（羊耳菊）
+    for med in ('白牛胆', '元参','金钱桔饼','葱白',
+                "厚朴", "川朴", "羊踯躅", '禹白附', '半支莲',
+                '半边莲'):
         print(med, ":", extract(med))
 
 # test_extract()

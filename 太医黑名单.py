@@ -822,17 +822,15 @@ def wrapData():
 
 Circled = "①②③④⑤⑥⑦⑧⑨⑩"
 def prepare_raw_data():
-    def split(l, sub):
-        start, find = 0, l.find(sub)
-        while find >= 0:
-            yield l[start:find]
-            start = find+len(sub)
-            find = l.find(sub, start)
-        yield l[start: ]
-
     def flatten(ll):
-        for l in ll: yield from split(l, '、')
-
+        for l in ll: #yeld from split(l, '、')
+            start, find = 0, l.find('、')
+            while find >= 0:
+                yield l[start:find]
+                start = find + 1
+                find = l.find('、', start)
+            yield l[start: ]
+            
     for cat in RAW_CAT_DATA:
         RAW_CAT_DATA[cat] = [name if name else "EMPTY" 
             for name in flatten(n[1 if n[0] in Circled else 0:-1] 
