@@ -168,14 +168,14 @@ def table_extract(table, title):
             entries[th.text] = td.text
     return entries
 
-def merged_items(da, db, dups='《+》'):
+def merged_items(da, db):
     seen = set()
     for kk, vv in da.items():
         if kk in db:
             seen.add(kk)
             if vv == db[kk]: yield kk, vv
-            else: yield kk, f'{vv}{dups}{db[kk]}'
-        else: yield vv
+            else: yield kk, f'{vv};;{db[kk]}'
+        else: yield kk, vv
     for kk, vv in db.items():
         if kk in seen: continue
         yield kk, vv
@@ -189,28 +189,22 @@ def printData(medict, fout):
     #kwds = {'别名': ["处方名","异名"], "功效作用": ["功效","通用","功效与作用"],}
     print(f"| {' | '.join(cols)} |", file=fout) # table headers
     print(f"| {' | '.join('---' for c in cols)} |", file=fout)
-    for med in medict:
-        dat, clean = medict[med], {}
+    for med, dat in medict.items():
+        clean = {} # clean data for a table row
         if len(dat) < 3: continue
-        if 'title' in dat:
-            print(f"标题与数据药名：{med},{title},{data['药材名']}")
-            continue
-        for kk,vv in merged_items(data, data['paradata']
-                  ) if 'table' in dat else dat.items():
+        if 'title' in dat: continue
+        for kk,vv in merged_items(dat, dat['paradata']
+                  ) if 'paradata' in dat else dat.items():
             if kk in cols:
                 clean[kk] = vv
-                continue
-            if kk == '性味归经':
+            elif kk == '性味归经':
                 pi = vv.find('。')
                 app_add(clean, '性味', vv[:pi+1])
                 app_add(clean, '归经', vv[pi+1:])
-                continue
-            if kk in ["处方名","异名"]:
+            elif kk in ["处方名","异名"]:
                 app_add(clean, '别名', vv)
-                continue
-            if kk in ["功效","通用","功效与作用"]:
+            elif kk in ["功效","通用","功效与作用"]:
                 app_add(clean, "功效作用", vv)
-                continue
                 
         for c, v in clean.items():
             if '\n' in v: clean[c] = v.replace('\n',' ')
@@ -257,6 +251,18 @@ def scrape_and_save(CATS, medone=None, file = 'medict'):
 ### TODO: check consistency of the med base
     # 别名是否有重复？
     # 性味是否和毒性重复？
+
+import sys
+def check_title(medict, fout = sys.stderr):
+    print("### 标题与数据对应的药名不同\n", file=fout)
+    cols = ['请求药材', '页面标题', '数据标题']
+    print(f"| {' | '.join(cols)} |", file=fout) # table headers
+    print(f"| {' | '.join('---' for c in cols)} |", file=fout)
+    for med, dat in medict.items():
+        if 'title' not in dat: continue
+        print(f"| {med} | {dat['title']} | {dat['药材名']} |")
+        if 'title' not in dat.get('paradata'): continue
+        print(f"| +{med} | 段落标题： | {dat['paradata']['药材名']} |")
 
 def alias_enum(dd):
     for key in ('别名', "处方名", "异名"):
