@@ -58,17 +58,10 @@ def extract(med):
     table = soup.find("table", feat)
     if table:
         res = table_extract(table, title)
-        res['性味'] = f"{res['药味']}；{res['药性']}"
+        res['性味'] = f"{res['药味']}::{res['药性']}"
         del res['药味'], res['药性']
         # del res['毒性'], res['始载于']
-        title_res = 'title' in res
-        if title_res:
-            print(f"\n   药名不同：{title} <=> {res['药材名']}")
-        for kk, vv in para_extract(soup, title).items():
-            if res.get(kk) == vv: continue
-            if title_res: vv = f'[{title}]：{vv}'
-            if kk not in res: res[kk] = vv
-            else: res[kk] = f'{res[kk]}《+》{vv}'
+        res['paradata'] = para_extract(soup, title)
     else:
         res = para_extract(soup, title)
         
@@ -76,6 +69,7 @@ def extract(med):
         res['图片'] = res['图片'][len(IMG_BASE):]
 
     return res
+
 
 # extract from paragraphs:
 #
@@ -129,6 +123,9 @@ def para_extract(soup, title):
         kwd = kwd.replace("性位", '性味') #e.g. 元参
         if kwd in EXCLUDED_KEYS: continue
         text = text[cind+1:].strip()
+        if kwd == '药材名' and title != text:
+            #print("\n  段落药名：{title} <=> {text}")
+            entries['title'] = title
         if text and len(kwd) <= 9:
              entries[kwd] = text
     return entries
@@ -157,7 +154,8 @@ def table_extract(table, title):
             entries['药材拼音'] = name[pinyin+1:]
             hanzi  = name[:pinyin]
             entries['药材名'] = hanzi
-            if hanzi != title:
+            if hanzi != title: 
+                #print(f"\n  表格药名：{title} <=> {hanzi}")
                 entries['title'] = title
             continue
         td = row.find('td')
@@ -170,30 +168,54 @@ def table_extract(table, title):
             entries[th.text] = td.text
     return entries
 
+def merged_items(da, db, dups='《+》'):
+    seen = set()
+    for kk, vv in da.items():
+        if kk in db:
+            seen.add(kk)
+            if vv == db[kk]: yield kk, vv
+            else: yield kk, f'{vv}{dups}{db[kk]}'
+        else: yield vv
+    for kk, vv in db.items():
+        if kk in seen: continue
+        yield kk, vv
+
 def printData(medict, fout):
+    def app_add(dd, kk, vv):
+        if kk in dd: dd[kk] = f"{dd[kk]};;{vv}"
+        else: dd[kk] = vv
+        
     cols = ['药材名', '别名', '性味', '归经', '功效作用', '英文名']
-    kwds = {'别名': ["处方名","异名"], "功效作用": ["功效","通用","功效与作用"],}
+    #kwds = {'别名': ["处方名","异名"], "功效作用": ["功效","通用","功效与作用"],}
     print(f"| {' | '.join(cols)} |", file=fout) # table headers
     print(f"| {' | '.join('---' for c in cols)} |", file=fout)
     for med in medict:
-        data, clean = medict[med], {}
-        if len(data) < 3: continue
-        for c in cols:
-            if c in data:
-                clean[c] = data[c]
-            elif c in kwds:
-                clean[c] = " ".join(f'{key}: {data[key]}'
-                        for key in kwds[c] if key in data)
-            elif c == '性味' and '性味归经' in data:
-                text = data['性味归经']
-                pi = text.find('。')
-                clean['性味'] = text[:pi]
-                clean['归经'] = text[pi+1:]
+        dat, clean = medict[med], {}
+        if len(dat) < 3: continue
+        if 'title' in dat:
+            print(f"标题与数据药名：{med},{title},{data['药材名']}")
+            continue
+        for kk,vv in merged_items(data, data['paradata']
+                  ) if 'table' in dat else dat.items():
+            if kk in cols:
+                clean[kk] = vv
+                continue
+            if kk == '性味归经':
+                pi = vv.find('。')
+                app_add(clean, '性味', vv[:pi+1])
+                app_add(clean, '归经', vv[pi+1:])
+                continue
+            if kk in ["处方名","异名"]:
+                app_add(clean, '别名', vv)
+                continue
+            if kk in ["功效","通用","功效与作用"]:
+                app_add(clean, "功效作用", vv)
+                continue
                 
         for c, v in clean.items():
             if '\n' in v: clean[c] = v.replace('\n',' ')
 
-        if clean['药材名'] != med: clean['药材名'] += f'[{med}]'
+        if clean['药材名'] != med: clean['药材名'] += f'/{med}'
 
         print(f"| {' | '.join(clean.get(c,'-') for c in cols)} |", file=fout)
 
@@ -212,7 +234,7 @@ def save_web(medict, file):
     with open(f"{file}.md", 'wt', encoding="utf-8") as fout:
         printData(medict, fout)
 
-    print(f'\nData saved to files: "{file}.py" and "{file}.md"')
+    print(f'\n Saved to files: "{file}.py" and "{file}.md"')
 
 def scrape_and_save(CATS, medone=None, file = 'medict'):
     global medict
@@ -226,10 +248,10 @@ def scrape_and_save(CATS, medone=None, file = 'medict'):
                     medone = None
                 continue
             scrape_web(meds, medict)
-            if len(medict) > prev_len + 200:
+            if len(medict) > prev_len + 300:
                 save_web(medict, file)
                 prev_len = len(medict)
-    if prev_len != len(medict):
+    if prev_len < len(medict):
         save_web(medict, file)
         
 ### TODO: check consistency of the med base
@@ -283,6 +305,11 @@ def check_duplications(medict):
             else: print(f"Bad redirection: {kk} => {med}")
     print("Duplications:", count)
 
+def check_weird_values(medict):
+    for kk, dd in medict.items():
+        for ff, vv in dd.items():
+            if re.search(r'[][<>【】]', vv):
+                print(f'D[{kk}][{ff}]= {vv}')
 
 ######################################
   #### END( WEB SCRAPING CODE ) ####
