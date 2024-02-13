@@ -185,7 +185,8 @@ def alias_enum(dd, seen = None):
         if key not in dd: continue
         pid = dd[key].find('。')
         text = dd[key] if pid<0 else dd[key][:pid]
-        for ali in re.sub(r'\([^)]+\)|（[^）]+）|《[^》]+》|[0-9).,:：、，）]',
+        for ali in re.sub(
+r'\([^)]+\)|\[[^[]+\]|（[^）]+）|《[^》]+》|［[^［]+］|[0-9).,:：、，）]',
                      ' ', text).split():
             if seen is None: yield ali
             elif ali not in seen:
@@ -391,7 +392,7 @@ if __name__ == "__main__":
     with open('checkdups.md', 'wt', encoding='utf-8') as fout:
         check_duplications(medict, fout)
 
-##    with open('datacheck.md', 'wt', encoding='utf-8') as fout:
-##        check_title(medict, fout=fout)
-##        check_weird_values(medict, fout)
+    with open('datacheck.md', 'wt', encoding='utf-8') as fout:
+        check_title(medict, fout=fout)
+        check_weird_values(medict, fout)
 
