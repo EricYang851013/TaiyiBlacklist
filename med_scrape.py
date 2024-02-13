@@ -180,6 +180,25 @@ def merged_items(da, db):
         if kk in seen: continue
         yield kk, vv
 
+def alias_enum(dd, seen = None):
+    for key in ('别名', "处方名", "异名"):
+        if key not in dd: continue
+        pid = dd[key].find('。')
+        text = dd[key] if pid<0 else dd[key][:pid]
+        for ali in re.sub(r'\([^)]+\)|（[^）]+）|《[^》]+》|[0-9).,:：、，）]',
+                     ' ', text).split():
+            if seen is None: yield ali
+            elif ali not in seen:
+                seen.add(ali)
+                yield ali                
+
+def merged_alias_enum(dd, unique=True):
+    seen = set() if unique else None
+    yield from alias_enum(dd, seen)
+    dd = dd.get('paradata')
+    if dd: yield from alias_enum(dd, seen)
+
+
 def printData(medict, fout):
     def app_add(dd, kk, vv):
         if kk in dd: dd[kk] = f"{dd[kk]};;{vv}"
@@ -201,13 +220,14 @@ def printData(medict, fout):
                 pi = vv.find('。')
                 app_add(clean, '性味', vv[:pi+1])
                 app_add(clean, '归经', vv[pi+1:])
-            elif kk in ["处方名","异名"]:
-                app_add(clean, '别名', vv)
             elif kk in ["功效","通用","功效与作用"]:
                 app_add(clean, "功效作用", vv)
-                
+
         for c, v in clean.items():
             if '\n' in v: clean[c] = v.replace('\n',' ')
+
+        clean['别名'] = '，'.join(m for m in merged_alias_enum(dat)
+                               if m!=clean['药材名'])
 
         if clean['药材名'] != med: clean['药材名'] += f'/{med}'
 
@@ -259,63 +279,95 @@ def check_title(medict, fout = sys.stderr):
     print(f"| {' | '.join(cols)} |", file=fout) # table headers
     print(f"| {' | '.join('---' for c in cols)} |", file=fout)
     for med, dat in medict.items():
-        if 'title' not in dat: continue
-        print(f"| {med} | {dat['title']} | {dat['药材名']} |")
-        if 'title' not in dat.get('paradata'): continue
-        print(f"| +{med} | 段落标题： | {dat['paradata']['药材名']} |")
+        if 'title' in dat: 
+            print(f"| {med} | {dat['title']} | {dat['药材名']} |", file=fout)
+        if 'paradata' not in dat: continue
+        if 'title' in dat['paradata']:
+            print(f"| +{med} | 段落标题： | {dat['paradata']['药材名']} |", file=fout)
+        if dat['药材名'] != dat['paradata']['药材名']:
+            print(f"| #表格<>段落 | {dat['药材名']}: | :{dat['paradata']['药材名']} |", file=fout)
 
-def alias_enum(dd):
-    for key in ('别名', "处方名", "异名"):
-        if key not in dd: continue
-        for ali in re.sub(r'\([^)]+\)|（[^）]+）|《[^》]+》|[.,、，。]',
-                     ' ', dd[key]).split():
-            yield ali
 
-def check_duplications(medict):
+def check_weird_values(medict, fout = sys.stderr):
+    print("\n### 带有其它内容的数据\n", file=fout)
+    cols = ["数据位置", "数据"]
+    print(f"| {' | '.join(cols)} |", file=fout) # table headers
+    print(f"| {' | '.join('---' for c in cols)} |", file=fout)
+
+    def check_dict(kk, dd):
+        for ff, vv in dd.items():
+            if ff == 'paradata':
+                check_dict(f'{kk}+', vv)
+            elif re.search(r'[【】]', vv):
+                if "\n" in vv: vv = vv.replace("\n","")
+                print(f'| /{kk}/{ff} | {vv} |', file=fout)
+            elif re.search(r'<[^>]+>', vv):
+                print(f'| /{kk}/{ff} | {vv} |', file=sys.stderr)
+                
+    for kk, dd in medict.items():
+        check_dict(kk, dd)
+
+    
+def check_duplications(medict, fout):
+    print("### 错误的重定向列表\n", file=fout)
+    cols = ['请求药名','得到药名', '别名清单']
+    print(f"| {' | '.join(cols)} |", file=fout) # table headers
+    print(f"| {' | '.join('---' for c in cols)} |", file=fout)
+
+    badred = 0 # counter for bad redirections
     medseen, aliseen = {}, {}
     for kk, dd in medict.items():
         med = dd['药材名']
-        kd = kk if kk == med else f"{med}<={kk}"
-        if med in medseen:
-            #print("已有药材名：{kd}")
-            medseen[med].append(kk)
-            continue
-        medseen[med]=[kk]
-        for ali in alias_enum(dd):
-            if ali == med: continue
+        if med in medseen: medseen[med].append(kk)
+        else: medseen[med]=[kk]
+        rba = 0 if kk==med else 1 # redirection?
+        for ali in merged_alias_enum(dd):
+            if rba and ali == kk:
+                rba = 2 # redirection by alias
+            if ali == med: continue #not an alias
             if ali in aliseen:
                 if med not in aliseen[ali]: 
-                    #print(f"重复的别名：{ali} [{kd}]")
                     aliseen[ali].append(med)
             else: aliseen[ali] = [med]
+        if rba == 1:
+            print(f"| {kk} | {med} | {'，'.join(ali for ali in merged_alias_enum(dd))} |",
+                  file=fout)
+            badred += 1
                 
-    input(f"别名数: {len(aliseen)}. 药材数 {len(medseen)}")
-    count = 0
+    print(f"\n无理的重定向的总次数：{badred}。", file=fout)    
+    print(f"别名数: {len(aliseen)}，药材数 {len(medseen)}，请求数{len(medict)}",
+          file = fout)
+
+
+    print("\n### 重复的药材别名列表\n", file=fout)
+    cols = ['药材别名','可称呼的药材']
+    print(f"| {' | '.join(cols)} |", file=fout) # table headers
+    print(f"| {' | '.join('---' for c in cols)} |", file=fout)
+
+    count, tot = 0, 0
     for ali, ml in aliseen.items():
-        if len(ml)>1:
-            print(ali, ml)
-        count += len(ml) - 1
-    print("Duplications:", count)
+        if len(ml)<2: continue
+        print(f"| {ali} | {'，'.join(ml)} |", file=fout)
+        tot += len(ml) 
+        count += 1
+    print(f"\n重复的别名数:{count}，总重复次数:{tot}，平均次数：{tot/count:.2f}",
+          file=fout)
 
-    input("太医黑名单中因为重定向而被多次访问的药名：")
-    count = 0
+    print("\n###因为重定向而被多次访问的药名\n", file=fout)
+    cols = ['药材名', '实际请求的药材']
+    print(f"| {' | '.join(cols)} |", file=fout) # table headers
+    print(f"| {' | '.join('---' for c in cols)} |", file=fout)
+
+    count, tot = 0, 0
     for med, kl in medseen.items():
-        count += len(kl) - 1
-        if len(kl)<2: continue
-        print(med, kl)
-        # check consistency
-        for kk in kl:
-            if kk == med: continue
-            for ali in alias_enum(medict[kk]):
-                if med == ali: break
-            else: print(f"Bad redirection: {kk} => {med}")
-    print("Duplications:", count)
+        if len(kl)<2:
+            continue #no repeated visit
+        count += 1
+        tot  += len(kl)
+        print(f"| {med} | {'，'.join(kl)} |", file=fout)
+    print(f"\n重复访问的药材数:{count}，总重复次数:{tot}，平均次数：{tot/count:.2f}",
+          file=fout)
 
-def check_weird_values(medict):
-    for kk, dd in medict.items():
-        for ff, vv in dd.items():
-            if re.search(r'[][<>【】]', vv):
-                print(f'D[{kk}][{ff}]= {vv}')
 
 ######################################
   #### END( WEB SCRAPING CODE ) ####
@@ -332,4 +384,14 @@ def test_extract():
 
 if __name__ == "__main__":
     taiyi.prepare_raw_data()
-    scrape_and_save(taiyi.RAW_CAT_DATA)
+
+    #scrape_and_save(taiyi.RAW_CAT_DATA, file = 'medict2')
+    from medict import medict
+
+    with open('checkdups.md', 'wt', encoding='utf-8') as fout:
+        check_duplications(medict, fout)
+
+##    with open('datacheck.md', 'wt', encoding='utf-8') as fout:
+##        check_title(medict, fout=fout)
+##        check_weird_values(medict, fout)
+
