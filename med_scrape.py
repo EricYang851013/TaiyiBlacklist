@@ -105,7 +105,10 @@ def extract(med):
 ##【功效与作用】利尿消肿、清热解毒。属清热药下属分类的清热解毒药。主治：小便不利，面目浮肿；蛇虫咬伤；胃癌肠癌、食管癌、肝癌及其并发腹水等病症。
 EXCLUDED_KEYS = '1234567891011①②③④⑤⑥⑦⑧⑨⑩一二三四五六七八九十'
 OpenClose = '[]<>【】［］'
-def parseKVpair(text, title, entries):
+def append_add(dd, kk, vv):
+    if kk in dd: dd[kk] = f"{dd[kk]};;{vv}"
+    else: dd[kk] = vv
+def parseKVpair(text, entries):
     if not text: raise Exception("没有内容")
     find = OpenClose.find(text[0])
     if find % 2: # find = -1 included
@@ -127,20 +130,25 @@ def parseKVpair(text, title, entries):
         fext=fext[1:]
     find = fext.find('【') # other fields?
     text = fext if find < 0 else fext[:find]
-    if kwd == '药材名' and title != text:
-        #print("\n  段落药名：{title} <=> {text}")
-        entries['title'] = title
     if text and len(kwd) <= 9: #no html tags
         text = re.sub(r'<[^>]*>','', text)
-        if text: entries[kwd] =  text
-    if find>=0: parseKVpair(fext[find:], title, entries)
+        if text: append_add(entries, kwd, text)
+    if find>=0: parseKVpair(fext[find:], entries)
 
 def para_extract(soup, title):
-    entries = {'from':'A+医学百科', '药材名':title}
+    entries = {'from':'A+医学百科'}
     # medname = '中药名' # ignore this
     for par in soup.find_all("p"):
-        try: parseKVpair(par.text, title, entries)
+        try: parseKVpair(par.text, entries)
         except: continue
+    if '药材名' not in entries:
+        entries['药材名'] = title
+    elif ';;' in entries['药材名']:
+        text = entries['药材名']
+        find = text.find(';;')
+        if len(set(text.split(';;')))>1:
+            print("Many names:", text, file=sys.stderr)
+        entries['药材名'] = text[:find]
     return entries
 
 # http://www.a-hospital.com/w/厚朴
@@ -214,10 +222,6 @@ def merged_alias_enum(dd, unique=True):
 
 
 def printData(medict, fout):
-    def app_add(dd, kk, vv):
-        if kk in dd: dd[kk] = f"{dd[kk]};;{vv}"
-        else: dd[kk] = vv
-        
     cols = ['药材名', '别名', '性味', '归经', '功效作用', '英文名']
     #kwds = {'别名': ["处方名","异名"], "功效作用": ["功效","通用","功效与作用"],}
     print(f"| {' | '.join(cols)} |", file=fout) # table headers
@@ -231,11 +235,12 @@ def printData(medict, fout):
             if kk in cols:
                 clean[kk] = vv
             elif kk == '性味归经':
-                pi = vv.find('。')
-                app_add(clean, '性味', vv[:pi+1])
-                app_add(clean, '归经', vv[pi+1:])
+                for vs in vv.split(';;'):
+                    pi = vs.find('。')
+                    append_add(clean, '性味', vs[:pi+1])
+                    append_add(clean, '归经', vs[pi+1:])
             elif kk in ["功效","通用","功效与作用"]:
-                app_add(clean, "功效作用", vv)
+                append_add(clean, "功效作用", vv)
 
         for c, v in clean.items():
             if '\n' in v: clean[c] = v.replace('\n',' ')
@@ -281,6 +286,8 @@ def scrape_and_save(CATS, medone=None, file = 'medict'):
                 prev_len = len(medict)
     if prev_len < len(medict):
         save_web(medict, file)
+    manual_fix(medict)
+
         
 ### TODO: check consistency of the med base
     # 别名是否有重复？
@@ -383,26 +390,6 @@ def check_duplications(medict, fout):
     print(f"\n重复访问的药材数:{count}，总重复次数:{tot}，平均次数：{tot/count:.2f}",
           file=fout)
 
-## Here is how to use post_fix :
-##
-##    from medict import medict #import previously processed
-##    for kk, dd in medict.items(): post_fix(dd)
-##    save_web(medict, 'medictfix')
-##
-def post_fix(dd):
-    title = dd['title'] if 'title' in dd else dd['药材名']
-    for ff, vv in dd.copy().items():
-        if ff == 'paradata': post_fix(dd['paradata'])
-        elif ff in EXCLUDED_KEYS:
-            print(ff, dd[ff], file=sys.stderr)
-            del dd[ff]
-        elif not vv:
-            print(f"Empty field: {ff}", file=sys.stderr)
-            del dd[ff]
-        else:
-            del dd[ff]
-            parseKVpair(f"【{ff}】{vv}", title, dd)
-            
 def manual_fix(medict):
     # this comes from the output of check_weird_values
     # NOTE: all fields belong to 'paradata' dict
@@ -413,26 +400,62 @@ def manual_fix(medict):
     for med, ff in weird_values.items():
         dd = medict[med]['paradata']
         print("Before:", dd[ff])
-
-        title = dd['title'] if 'title' in dd else dd['药材名']
         if med == '马蹄蕨':
             vv = dd[ff]
             print("异名：", dd.get("异名"))
             find = vv.find("异名】")
             text = f"【{ff}】{vv[:find]}【{vv[find:]}"
             del dd[ff]
-            parseKVpair(text, title, dd)
+            parseKVpair(text, dd)
             print("异名：", dd.get("异名"))
         elif med in ('雀梅藤','糯米'):
             dd[ff] = dd[ff][:-1]
         elif med == '骆驼肉':
             dd[ff] = dd[ff].replace("】、维生素B：","")
-            
         print("After:", dd[ff])
+
+## 归经属性
+MERIDIANS = ["心", "肝", "脾", "肺", "肾", "心包", 
+             "小肠", "胆", "胃", "大肠", "膀胱", "三焦", "大小肠"]
+def findMeridianAttr(dd):
+   text = dd.get( '归经', '')
+   if 'paradata' in dd:
+       text += dd['paradata'].get( '归经', '')
+   res = 0
+   print(dd['药材名'], end="：")
+   for i, mm in enumerate(MERIDIANS):
+       if mm in text: 
+           res |= 1<<i
+           print(mm, end="，")
+   print()
+   return res
 
 ######################################
   #### END( WEB SCRAPING CODE ) ####
 ######################################
+
+## This code is used only if field value text 
+#  contain other fields and values like 【归经】肝经。
+def post_fix_all(file='medfix'):
+    from medict import medict # previously scraped
+    for kk, dd in medict.items(): 
+        post_fix_one(dd)
+    manual_fix(medict)
+    save_web(medict, file)
+
+def post_fix_one(dd):
+    for ff, vv in dd.copy().items():
+        if ff == 'paradata': 
+            post_fix(dd['paradata'])
+        elif ff in EXCLUDED_KEYS:
+            print(ff, dd[ff], file=sys.stderr)
+            del dd[ff]
+        elif not vv:
+            print(f"Empty field: {ff}", file=sys.stderr)
+            del dd[ff]
+        else:
+            del dd[ff]
+            parseKVpair(f"【{ff}】{vv}", dd)
 
 def test_extract():
     #【药 材 名】白牛胆【英 文 名】Sheepear Inula Her（羊耳菊）
@@ -446,12 +469,7 @@ def test_extract():
 
 if __name__ == "__main__":
     taiyi.prepare_raw_data()
-
-    #scrape_and_save(taiyi.RAW_CAT_DATA, file = 'medict2')
-    from medict import medict
-    for kk, dd in medict.items(): post_fix(dd)
-    manual_fix(medict)
-    save_web(medict, 'medictfix')
+    scrape_and_save(taiyi.RAW_CAT_DATA, file = 'medata')
 
     with open('checkdups.md', 'wt', encoding='utf-8') as fout:
         check_duplications(medict, fout)
@@ -459,4 +477,9 @@ if __name__ == "__main__":
     with open('datacheck.md', 'wt', encoding='utf-8') as fout:
         check_title(medict, fout=fout)
         check_weird_values(medict, fout)
+
+    for kk, dd in medict.items():
+        print(kk, findMeridianAttr(dd))
+        if input("Quit?"): break
+
 
