@@ -422,7 +422,7 @@ def manual_fix(medict):
 ## 归经属性
 MERIDIANS = ["心", "肝", "脾", "肺", "肾", "心包", 
              "小肠", "胆", "胃", "大肠", "膀胱", "三焦", "大小肠"]
-def findMeridianAttr(dd):
+def getMeridian(dd):
    text = dd.get( '归经', '')
    if 'paradata' in dd:
        text += dd['paradata'].get( '归经', '')
@@ -434,6 +434,37 @@ def findMeridianAttr(dd):
            print(mm, end="，")
    print()
    return res
+
+## 药性与药味
+FLAVORS_ATTRS = "甘苦辛酸咸涩淡寒凉平温热"
+def getFlavorAttr(dd):
+
+    def get(kk, vv):
+       for ff in  ["性味", "药味", "药性"]:
+           if ff not in kk: continue
+           for i, mm in enumerate(FLAVORS_ATTRS):
+               if i & (1<<i): continue
+               if mm in vv:
+                   res |= 1<<i
+                   print(mm, end="，")
+                if i & (1<<i):
+                    print("::", vv)
+
+    print(dd['药材名'], end="：")
+    res = 0
+
+    for kk, vv in dd.items():
+       get(kk, vv)
+
+    if 'paradata' not in dd:
+       return res
+
+    for kk, vv in dd['paradata'].items():
+       get(kk, vv)
+
+    print()
+    return res
+
 
 ######################################
   #### END( WEB SCRAPING CODE ) ####
@@ -487,7 +518,8 @@ if __name__ == "__main__":
         check_weird_values(medict, fout)
 
     for kk, dd in medict.items():
-        print(kk, findMeridianAttr(dd))
+        print(kk, getMeridian(dd))
+        print(kk, getFlavorAttr(dd))
         if input("Quit?"): break
 
 
