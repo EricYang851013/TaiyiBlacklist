@@ -35,17 +35,19 @@ import requests, time, re
 
 IMG_BASE = 'http://p.ayxbk.com/images/thumb/'
 def extract(med):
-    url = f'http://www.a-hospital.com/w/{med}'
-    for i in range(3):
-        try: res = requests.get(url)
-        except requests.exceptions.Timeout:
-            time.sleep(20)
-            continue #retry
-        if res.status_code == 200: break
-        return # all other status_code,
-               # 404: title is "页面没找到！"
-    else: return # after failing 3 times
-    soup = BeautifulSoup(res.text, 'html.parser')
+    if med not in CACHE:
+        url = f'http://www.a-hospital.com/w/{med}'
+        for i in range(3):
+            try: res = requests.get(url)
+            except requests.exceptions.Timeout:
+                time.sleep(20)
+                continue #retry
+            if res.status_code == 200: break
+            return # all other status_code,
+                   # 404: title is "页面没找到！"
+        else: return # after failing 3 times
+        CACHE[med] = res.text #CACHE pages
+    soup = BeautifulSoup(CACHE[med], 'html.parser')
     title = soup.find(id='firstHeading')
     if not title:
         print(f"\n {med}: 没有发现firstHeading!")
@@ -266,8 +268,11 @@ def save_web(medict, file):
         print("medict =", medict, file=fout)
     with open(f"{file}.md", 'wt', encoding="utf-8") as fout:
         printData(medict, fout)
-
     print(f'\n Saved to files: "{file}.py" and "{file}.md"')
+        
+    with open(PAGECACHE_FILE, 'wt', encoding="utf-8") as fout:
+        print("CACHE =", CACHE, file=fout)
+
 
 def scrape_and_save(CATS, medone=None, file = 'medict'):
     global medict
@@ -466,8 +471,11 @@ def test_extract():
         time.sleep(3)
 
 #test_extract()
-
+PAGECACHE_FILE = 'pagecache.py'
 if __name__ == "__main__":
+    try: from pagecache import CACHE
+    except: CACHE = {}
+    
     taiyi.prepare_raw_data()
     scrape_and_save(taiyi.RAW_CAT_DATA, file = 'medata')
 
