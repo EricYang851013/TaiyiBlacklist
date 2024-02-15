@@ -544,7 +544,7 @@ def extract_poison_page(i, psnd):
         valu = rows[1].text.strip()
         find = text.find('（')
         if find >= 0:
-            valu += text[find:]
+            valu =f"{valu}::{text[find:]}"
             text = text[:find]
         #print("Herb:", text, "Poison?:", valu)
         if text: append_add(psnd, text, valu)
