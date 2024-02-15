@@ -254,44 +254,46 @@ def printData(medict, fout):
 
         print(f"| {' | '.join(clean.get(c,'-') for c in cols)} |", file=fout)
 
-def scrape_web(meds, medict, nline=12):
-    for med in meds.split(taiyi.ALT_NAME_SEP):
-        ens = extract(med)
-        if ens:
-            medict[med] = ens
-            # IDLE在显示很长一行文字的时候很费时，可长达好几分钟
-            print(med, end='、' if len(medict)%nline else '、\n')
-        time.sleep(3) # don't overwhelm the website
-
 def save_web(medict, file):
     with open(f"{file}.py", "wt", encoding="utf-8") as fout:
         print("medict =", medict, file=fout)
     with open(f"{file}.md", 'wt', encoding="utf-8") as fout:
         printData(medict, fout)
     print(f'\n Saved to files: "{file}.py" and "{file}.md"')
-        
-    with open(PAGECACHE_FILE, 'wt', encoding="utf-8") as fout:
-        print("CACHE =", CACHE, file=fout)
 
 
-def scrape_and_save(CATS, medone=None, file = 'medict'):
-    global medict
-    if medone is None: # no previous work
-        medict = {} # start fresh
-    prev_len = len(medict)
+def scrape_and_save(CATS, file):
+    global CACHE, medict
+    try: from pagecache import CACHE
+    except: CACHE = {}
+    cache_size = prev_len = len(CACHE)
     for cat in CATS:
         for meds in CATS[cat]:
-            if medone: # previous work done
-                if medone == meds: # til meds 
-                    medone = None
-                continue
-            scrape_web(meds, medict)
-            if len(medict) > prev_len + 300:
+            for med in meds.split(taiyi.ALT_NAME_SEP):
+                if med in medict: continue
+                ens = extract(med)
+                if ens:
+                    medict[med] = ens
+                    # IDLE在显示很长一行文字的时候很费时，可长达好几分钟
+                    print(med, end='、' if len(medict)%nline else '、\n')
+                time.sleep(3) # don't overwhelm the website
+            if len(CACHE) > prev_len + 200:
                 save_web(medict, file)
-                prev_len = len(medict)
-    if prev_len < len(medict):
-        save_web(medict, file)
+                prev_len = len(CACHE)
+
     manual_fix(medict)
+    save_web(medict, file)
+
+    with open('checkdups.md', 'wt', encoding='utf-8') as fout:
+        check_duplications(medict, fout)
+
+    with open('datacheck.md', 'wt', encoding='utf-8') as fout:
+        check_title(medict, fout=fout)
+        check_weird_values(medict, fout)
+
+    if cache_size < len(CACHE):
+        with open(PAGECACHE_FILE, 'wt', encoding="utf-8") as fout:
+            print("CACHE =", CACHE, file=fout)
 
         
 ### TODO: check consistency of the med base
@@ -440,15 +442,16 @@ FLAVORS_ATTRS = "甘苦辛酸咸涩淡寒凉平温热"
 def getFlavorAttr(dd):
 
     def get(kk, vv):
-       for ff in  ["性味", "药味", "药性"]:
+        nonlocal res
+        for ff in  ["性味", "药味", "药性"]:
            if ff not in kk: continue
            for i, mm in enumerate(FLAVORS_ATTRS):
-               if i & (1<<i): continue
+               if res & (1<<i): continue
                if mm in vv:
                    res |= 1<<i
                    print(mm, end="，")
-                if i & (1<<i):
-                    print("::", vv)
+               if res & (1<<i):
+                   print("::", vv)
 
     print(dd['药材名'], end="：")
     res = 0
@@ -465,10 +468,6 @@ def getFlavorAttr(dd):
     print()
     return res
 
-
-######################################
-  #### END( WEB SCRAPING CODE ) ####
-######################################
 
 ## This code is used only if field value text 
 #  contain other fields and values like 【归经】肝经。
@@ -502,20 +501,71 @@ def test_extract():
         time.sleep(3)
 
 #test_extract()
-PAGECACHE_FILE = 'pagecache.py'
+
+## This part relates to poison data scraping
+
+def extract_poisons(file = 'poisinf.py'):
+    global POISON_CACHE
+    try: from poison_pages import POISON_CACHE
+    except: POISON_CACHE = {}
+    cache_size = len(POISON_CACHE)
+    psnd = {} #poison dict
+
+    for i in range(6): extract_poison_page(i, psnd)
+
+    if cache_size < len(POISON_CACHE):
+        with open('poison_pages.py', 'wt', encoding='utf-8') as fout:
+            print('POISON_CACHE =', POISON_CACHE, file=fout)
+            
+    with open(file, 'wt', encoding='utf-8') as fout:
+        print('poisinf =', psnd, file=fout)
+    return psnd
+
+def extract_poison_page(i, psnd):
+    base = 'http://www.a-hospital.com/w/有毒中药列表'
+    url = f'{base}/{i+1}' if i else base
+    if url not in POISON_CACHE:
+        for i in range(3):
+            try: res = requests.get(url)
+            except requests.exceptions.Timeout:
+                time.sleep(20)
+                continue #retry
+            if res.status_code == 200: break
+            return # all other status_code
+        else: return # after failing 3 times
+        POISON_CACHE[url] = res.text #CACHE pages
+    soup = BeautifulSoup(POISON_CACHE[url], 'html.parser')
+    for ti, tab in enumerate(soup.find_all("table")):
+        if not ti: continue
+        rows = [r for r in tab.find_all('tr')]
+        text = rows[0].text.strip() #need strip!!
+        if text.startswith("有毒中药列表一共有6页"):
+            break # end of poison list on this page
+        valu = rows[1].text.strip()
+        find = text.find('（')
+        if find >= 0:
+            valu += text[find:]
+            text = text[:find]
+        #print("Herb:", text, "Poison?:", valu)
+        if text: append_add(psnd, text, valu)
+        else: print("Empty name:", valu, file=sys.stderr)
+        #if input("quit?"): break
+
+######################################
+  #### END( WEB SCRAPING CODE ) ####
+######################################
+
+
+
 if __name__ == "__main__":
-    try: from pagecache import CACHE
-    except: CACHE = {}
     
-    taiyi.prepare_raw_data()
-    scrape_and_save(taiyi.RAW_CAT_DATA, file = 'medata')
+    #taiyi.prepare_raw_data()
 
-    with open('checkdups.md', 'wt', encoding='utf-8') as fout:
-        check_duplications(medict, fout)
-
-    with open('datacheck.md', 'wt', encoding='utf-8') as fout:
-        check_title(medict, fout=fout)
-        check_weird_values(medict, fout)
+    try: from medata import medict
+    except: medict = {}
+    #scrape_and_save(taiyi.RAW_CAT_DATA, file = 'medata')
+    
+    psnd = extract_poisons()
 
     for kk, dd in medict.items():
         print(kk, getMeridian(dd))
