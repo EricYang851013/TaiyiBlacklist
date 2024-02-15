@@ -111,6 +111,7 @@ def append_add(dd, kk, vv):
     if kk in dd: dd[kk] = f"{dd[kk]};;{vv}"
     else: dd[kk] = vv
 def parseKVpair(text, entries):
+  while True:
     if not text: raise Exception("没有内容")
     find = OpenClose.find(text[0])
     if find % 2: # find = -1 included
@@ -132,17 +133,33 @@ def parseKVpair(text, entries):
         fext=fext[1:]
     find = fext.find('【') # other fields?
     text = fext if find < 0 else fext[:find]
-    if text and len(kwd) <= 9: #no html tags
-        text = re.sub(r'<[^>]*>','', text)
+    if text and len(kwd) <= 9: 
+        text = re.sub(r'<[^>]*>','', text) #no html tags
         if text: append_add(entries, kwd, text)
-    if find>=0: parseKVpair(fext[find:], entries)
+    if find<0: break
+    text = fext[find:]
 
 def para_extract(soup, title):
     entries = {'from':'A+医学百科'}
     # medname = '中药名' # ignore this
-    for par in soup.find_all("p"):
-        try: parseKVpair(par.text, entries)
-        except: continue
+    for ii, par in enumerate(soup.find_all("p")):
+        text = par.text# empty text -> end of content
+        find = OpenClose.find(text[0]) if text else 0
+        if find % 2 == 0:
+            # new field or end of content
+            if ii==0: lines = [text]; continue
+            merged, lines = "".join(lines), [text]
+            try: parseKVpair(merged, entries)
+            except: continue 
+        else: # find = -1 included: no new field
+            if ii: lines.append(text)
+            else: lines = [text]
+        if not text: break # -> end of content
+        par = par.find_next_sibling()
+        if not par or par.name != 'p':
+            merged, lines = "".join(lines), []
+            try: parseKVpair(merged, entries)
+            except: continue 
     if '药材名' not in entries:
         entries['药材名'] = title
     elif ';;' in entries['药材名']:
@@ -423,7 +440,7 @@ def manual_fix(medict):
 
 ## 归经属性
 MERIDIANS = ["心", "肝", "脾", "肺", "肾", "心包", 
-             "小肠", "胆", "胃", "大肠", "膀胱", "三焦", "大小肠"]
+"小肠", "胆", "胃", "大肠", "膀胱", "三焦", "大小肠"]
 def getMeridian(dd):
    text = dd.get( '归经', '')
    if 'paradata' in dd:
@@ -492,12 +509,27 @@ def post_fix_one(dd):
             del dd[ff]
             parseKVpair(f"【{ff}】{vv}", dd)
 
+def print_med(med, dat):
+    if not dat:
+        print (med, ":: Not Found!", )
+        return True
+    print(f"==>> Extracted fields for {med}:")
+    for ff, vv in dat.items():
+        if ff!='paradata':
+            print(f"【{ff}】{vv}")
+            continue
+        for ff, vv in vv.items():
+            print(f">>【{ff}】{vv}")
+    
 def test_extract():
+    global CACHE
+    if 'CACHE' not in globals():
+        CACHE = {}
     #【药 材 名】白牛胆【英 文 名】Sheepear Inula Her（羊耳菊）
     for med in ('菊花参', '白牛胆', '元参','金钱桔饼','葱白',
                 "厚朴", "川朴", "羊踯躅", '禹白附', '半支莲',
                 '半边莲'):
-        print(med, ":", extract(med))
+        print_med(med, extract(med) )
         time.sleep(3)
 
 #test_extract()
@@ -556,8 +588,9 @@ def extract_poison_page(i, psnd):
 ######################################
 
 
+test_extract()
 
-if __name__ == "__main__":
+if __name__ == "__main__*":
     
     #taiyi.prepare_raw_data()
 
