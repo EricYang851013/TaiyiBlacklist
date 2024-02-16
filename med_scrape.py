@@ -21,7 +21,6 @@
 ######################################
  #### BEGIN( WEB SCRAPING CODE ) ####
 ######################################
-import 太医黑名单 as taiyi
 from bs4 import BeautifulSoup
 import requests, time, re
 
@@ -33,9 +32,12 @@ import requests, time, re
 # Another good website is baike.baidu.com 
 # https://baike.baidu.com/item/褚实子
 
+DBG_EXTRACT = False
+
 IMG_BASE = 'http://p.ayxbk.com/images/thumb/'
-def extract(med):
+def extract(med, cache_only=False):
     if med not in CACHE:
+        if cache_only: return #Nothing to do
         url = f'http://www.a-hospital.com/w/{med}'
         for i in range(3):
             try: res = requests.get(url)
@@ -43,7 +45,7 @@ def extract(med):
                 time.sleep(20)
                 continue #retry
             if res.status_code == 200: break
-            return # all other status_code,
+            return # all other status_code, such as
                    # 404: title is "页面没找到！"
         else: return # after failing 3 times
         CACHE[med] = res.text #CACHE pages
@@ -64,9 +66,8 @@ def extract(med):
         del res['药味'], res['药性']
         # del res['毒性'], res['始载于']
         res['paradata'] = para_extract(soup, title)
-    else:
-        res = para_extract(soup, title)
-        
+    else: res = para_extract(soup, title)
+
     if res.get('图片','').startswith(IMG_BASE):
         res['图片'] = res['图片'][len(IMG_BASE):]
 
@@ -106,60 +107,71 @@ def extract(med):
 ##【性味归经】性平，味辛。归心经、小肠经、肺经。
 ##【功效与作用】利尿消肿、清热解毒。属清热药下属分类的清热解毒药。主治：小便不利，面目浮肿；蛇虫咬伤；胃癌肠癌、食管癌、肝癌及其并发腹水等病症。
 EXCLUDED_KEYS = '1234567891011①②③④⑤⑥⑦⑧⑨⑩一二三四五六七八九十'
-OpenClose = '[]<>【】［］'
-def append_add(dd, kk, vv):
-    if kk in dd: dd[kk] = f"{dd[kk]};;{vv}"
-    else: dd[kk] = vv
-def parseKVpair(text, entries):
-  while True:
-    if not text: raise Exception("没有内容")
+OpenClose = '[]【】［］〖〗'
+def getKVpair(text):
     find = OpenClose.find(text[0])
     if find % 2: # find = -1 included
-        raise Exception("无关键词起始标志")
+        find = text.find('【')
+        if find < 0: find = len(text)
+        if DBG_EXTRACT:
+            print("无关键词起始标志:",
+                  text[:find], file=sys.stderr)
+        return "", "", text[find:]
     cind = text.find(OpenClose[find+1])
     if cind < 0: # didn't close!
-        raise Exception("无关键词结束标志")
+        if DBG_EXTRACT:
+            print("无关键词结束标志:", text,
+                  file=sys.stderr)
+        return "", "", ""
     kwd = text[1:cind] #text starts with key
     find = kwd.find('-') #special split
     if find > 0: kwd=kwd[:find]
-    kwd = re.sub(r'[ ，、]',"", kwd)
+    kwd = re.sub(r'[ ，、]', "", kwd)
     kwd = kwd.replace("性位", '性味') #e.g. 元参
-    if kwd in EXCLUDED_KEYS: # empty kwd included
-        raise Exception(f"错误关键词:{kwd}")
-    fext = text[cind+1:]
-    if not fext: return # empty field
-    if fext[0] in "：:":
-        #print(f"Value starts with：: {text}", file=sys.stderr)
-        fext=fext[1:]
-    find = fext.find('【') # other fields?
-    text = fext if find < 0 else fext[:find]
-    if text and len(kwd) <= 9: 
-        text = re.sub(r'<[^>]*>','', text) #no html tags
-        if text: append_add(entries, kwd, text)
-    if find<0: break
-    text = fext[find:]
+    text = text[cind+1:]
+    find = text.find('【') # other fields?
+    fext = text if find < 0 else text[:find]
+    text = "" if find<0 else text[find:]
+    return kwd, fext, text
+
+def append_add(dd, kk, vv):
+    if kk in dd: dd[kk] = f"{dd[kk]};;{vv}"
+    else: dd[kk] = vv
+
+def parseKVpairs(text, entries):
+    while text:
+        kwd, fext, text = getKVpair(text)
+        # empty kwd included
+        if kwd in EXCLUDED_KEYS:
+            if kwd or fext:
+                if DBG_EXTRACT:
+                    print("Excluded: Key=", kwd, "Value=",
+                          fext, file=sys.stderr)
+            continue
+        #raise Exception(f"错误关键词:{kwd}")
+        if not fext or len(kwd) > 9:
+            if DBG_EXTRACT:
+                print("Bad key or value: Key=", kwd,
+                      "Value=", fext, file=sys.stderr)
+            continue
+        append_add(entries, kwd, fext)
 
 def para_extract(soup, title):
-    entries = {'from':'A+医学百科'}
+    entries, lines = {'from':'A+医学百科'}, []
     # medname = '中药名' # ignore this
-    for ii, par in enumerate(soup.find_all("p")):
+    for par in soup.find_all("p"):
         text = par.text# empty text -> end of content
+        #print(">>> DUMP:", text, file=sys.stderr)
         find = OpenClose.find(text[0]) if text else 0
-        if find % 2 == 0:
-            # new field or end of content
-            if ii==0: lines = [text]; continue
-            merged, lines = "".join(lines), [text]
-            try: parseKVpair(merged, entries)
-            except: continue 
-        else: # find = -1 included: no new field
-            if ii: lines.append(text)
-            else: lines = [text]
-        if not text: break # -> end of content
+        if find % 2 == 0: # end of current field
+            merged = "".join(lines)
+            lines = [text]
+            parseKVpairs(merged, entries)
+        else: lines.append(text) # extra field text
         par = par.find_next_sibling()
-        if not par or par.name != 'p':
+        if not par or par.name != 'p': # end of field
             merged, lines = "".join(lines), []
-            try: parseKVpair(merged, entries)
-            except: continue 
+            parseKVpairs(merged, entries)
     if '药材名' not in entries:
         entries['药材名'] = title
     elif ';;' in entries['药材名']:
@@ -168,6 +180,8 @@ def para_extract(soup, title):
         if len(set(text.split(';;')))>1:
             print("Many names:", text, file=sys.stderr)
         entries['药材名'] = text[:find]
+    if entries['药材名'] != title:
+        entries['title'] = title
     return entries
 
 # http://www.a-hospital.com/w/厚朴
@@ -204,7 +218,7 @@ def table_extract(table, title):
         if img:
             entries['图片'] = img['src']
             continue
-        if td and th:
+        if td and th: # may get empty fields
             entries[th.text] = td.text
     return entries
 
@@ -226,7 +240,7 @@ def alias_enum(dd, seen = None):
         pid = dd[key].find('。')
         text = dd[key] if pid<0 else dd[key][:pid]
         for ali in re.sub(
-r'\([^)]+\)|\[[^[]+\]|（[^）]+）|《[^》]+》|［[^［]+］|[0-9).,:：、，）]',
+r'\([^)]+\)|\[[^[]+\]|（[^）]+）|《[^》]+》|［[^［]+］|[0-9);.,:：、，）]',
                      ' ', text).split():
             if seen is None: yield ali
             elif ali not in seen:
@@ -279,26 +293,38 @@ def save_web(medict, file):
     print(f'\n Saved to files: "{file}.py" and "{file}.md"')
 
 
-def scrape_and_save(CATS, file):
+def scrape_and_extract(cache_only = False, nline=12):
     global CACHE, medict
     try: from pagecache import CACHE
     except: CACHE = {}
     cache_size = prev_len = len(CACHE)
-    for cat in CATS:
-        for meds in CATS[cat]:
-            for med in meds.split(taiyi.ALT_NAME_SEP):
+
+    from 太医黑名单 import RAW_CAT_DATA, ALT_NAME_SEP
+
+    for cat, clist in RAW_CAT_DATA.items():
+        for meds in clist:
+            for med in meds.split(ALT_NAME_SEP):
                 if med in medict: continue
-                ens = extract(med)
-                if ens:
-                    medict[med] = ens
-                    # IDLE在显示很长一行文字的时候很费时，可长达好几分钟
-                    print(med, end='、' if len(medict)%nline else '、\n')
-                time.sleep(3) # don't overwhelm the website
+                # don't overwhelm the website
+                if med not in CACHE and not cache_only:
+                    time.sleep(3)
+                ens = extract(med, cache_only)
+                if ens: medict[med] = ens
+                # IDLE在显示很长一行文字的时候很费时，可长达好几分钟
+                print(med, '+' if ens else "-", end='、'
+                      if len(medict)%nline else '、\n')
             if len(CACHE) > prev_len + 200:
                 save_web(medict, file)
                 prev_len = len(CACHE)
 
-    manual_fix(medict)
+    if cache_size < len(CACHE):
+        with open(PAGECACHE_FILE, 'wt', encoding="utf-8") as fout:
+            print("CACHE =", CACHE, file=fout)
+
+def check_and_save(file):
+    global medict
+
+    fix_weird_values(medict)
     save_web(medict, file)
 
     with open('checkdups.md', 'wt', encoding='utf-8') as fout:
@@ -308,9 +334,6 @@ def scrape_and_save(CATS, file):
         check_title(medict, fout=fout)
         check_weird_values(medict, fout)
 
-    if cache_size < len(CACHE):
-        with open(PAGECACHE_FILE, 'wt', encoding="utf-8") as fout:
-            print("CACHE =", CACHE, file=fout)
 
         
 ### TODO: check consistency of the med base
@@ -348,11 +371,57 @@ def check_weird_values(medict, fout = sys.stderr):
                 if "\n" in vv: vv = vv.replace("\n","")
                 print(f'| /{kk}/{ff} | {vv} |', file=fout)
             elif re.search(r'<[^>]+>', vv):
-                print(f'| /{kk}/{ff} | {vv} |', file=sys.stderr)
+                print(f'| /{kk}/{ff} | {vv} |', file=fout)
                 
     for kk, dd in medict.items():
         check_dict(kk, dd)
 
+def fix_weird_values(medict):
+    # this comes from the output of check_weird_values
+    # NOTE: all fields belong to 'paradata' dict
+    weird_values = {'马蹄蕨':'别名',
+                   '雀梅藤':'科属分类',
+                   '骆驼肉':'骆驼肉营养成分',
+                   '糯米':'科属分类',
+                   '野荔枝':'资源分布',
+                   '柳穿鱼':'功用' ,
+                    }
+    def extra_field(dd, ff, nfn):
+        vv = dd[ff]
+        find = vv.find(f"{nfn}】")
+        if find < 0: return
+        text = f"【{ff}】{vv[:find]}【{vv[find:]}"
+        del dd[ff]
+        print(f"{nfn}：{dd.get(nfn)}")
+        parseKVpairs(text, dd)
+        print(f"{nfn}：{dd.get(nfn)}")
+
+    for med, ff in weird_values.items():
+        dd = medict[med]['paradata']
+        print("Before:", ff, dd[ff])
+        if med == '马蹄蕨':
+            extra_field(dd, ff, "异名")
+        elif med == '野荔枝':
+            extra_field(dd, ff, "动植物形态")
+        elif med == '柳穿鱼':
+            extra_field(dd, ff, "功用主治")
+        elif med in ('雀梅藤','糯米'):
+            dd[ff] = dd[ff][:-1]
+        elif med == '骆驼肉':
+            dd[ff] = dd[ff].replace("】、维生素B：","")
+        #elif '<' in dd[ff] or '>' in dd[ff]: ## tags
+        #    dd[ff] = re.sub(r'<[^>]*>','', dd[ff]) 
+        print("After:", ff, dd[ff])
+
+    def fix_dict(dd):
+        for ff, vv in dd.items():
+            if ff == 'paradata':
+                fix_dict(vv)
+            elif vv and vv[0] in "：:":
+                dd[ff] = vv[1:]
+                
+    for kk, dd in medict.items():
+        fix_dict(dd)
     
 def check_duplications(medict, fout):
     print("### 错误的重定向列表\n", file=fout)
@@ -414,29 +483,8 @@ def check_duplications(medict, fout):
     print(f"\n重复访问的药材数:{count}，总重复次数:{tot}，平均次数：{tot/count:.2f}",
           file=fout)
 
-def manual_fix(medict):
-    # this comes from the output of check_weird_values
-    # NOTE: all fields belong to 'paradata' dict
-    weird_values = {'马蹄蕨':'别名',
-                   '雀梅藤':'科属分类',
-                   '骆驼肉':'骆驼肉营养成分',
-                   '糯米':'科属分类'}
-    for med, ff in weird_values.items():
-        dd = medict[med]['paradata']
-        print("Before:", dd[ff])
-        if med == '马蹄蕨':
-            vv = dd[ff]
-            print("异名：", dd.get("异名"))
-            find = vv.find("异名】")
-            text = f"【{ff}】{vv[:find]}【{vv[find:]}"
-            del dd[ff]
-            parseKVpair(text, dd)
-            print("异名：", dd.get("异名"))
-        elif med in ('雀梅藤','糯米'):
-            dd[ff] = dd[ff][:-1]
-        elif med == '骆驼肉':
-            dd[ff] = dd[ff].replace("】、维生素B：","")
-        print("After:", dd[ff])
+
+
 
 ## 归经属性
 MERIDIANS = ["心", "肝", "脾", "肺", "肾", "心包", 
@@ -492,7 +540,7 @@ def post_fix_all(file='medfix'):
     from medict import medict # previously scraped
     for kk, dd in medict.items(): 
         post_fix_one(dd)
-    manual_fix(medict)
+    fix_weird_values(medict)
     save_web(medict, file)
 
 def post_fix_one(dd):
@@ -507,7 +555,7 @@ def post_fix_one(dd):
             del dd[ff]
         else:
             del dd[ff]
-            parseKVpair(f"【{ff}】{vv}", dd)
+            parseKVpairs(f"【{ff}】{vv}", dd)
 
 def print_med(med, dat):
     if not dat:
@@ -521,10 +569,10 @@ def print_med(med, dat):
         for ff, vv in vv.items():
             print(f">>【{ff}】{vv}")
     
-def test_extract():
+def test_extract(use_cache=False):
     global CACHE
-    if 'CACHE' not in globals():
-        CACHE = {}
+    if use_cache: from pagecache import CACHE
+    if 'CACHE' not in globals(): CACHE = {}
     #【药 材 名】白牛胆【英 文 名】Sheepear Inula Her（羊耳菊）
     for med in ('菊花参', '白牛胆', '元参','金钱桔饼','葱白',
                 "厚朴", "川朴", "羊踯躅", '禹白附', '半支莲',
@@ -543,7 +591,9 @@ def extract_poisons(file = 'poisinf.py'):
     cache_size = len(POISON_CACHE)
     psnd = {} #poison dict
 
-    for i in range(6): extract_poison_page(i, psnd)
+    for i in range(6):
+        extract_poison_page(i, psnd)
+        time.sleep(5)
 
     if cache_size < len(POISON_CACHE):
         with open('poison_pages.py', 'wt', encoding='utf-8') as fout:
@@ -587,18 +637,20 @@ def extract_poison_page(i, psnd):
   #### END( WEB SCRAPING CODE ) ####
 ######################################
 
+from pagecache import CACHE
+#print_med('半支莲', extract('半支莲'))
+#print_med('七里香', extract('七里香'))
+#test_extract(True)
 
-test_extract()
+if __name__ == "__main__":
+    medict = {}
+    scrape_and_extract(cache_only=True)
+    check_and_save('medbase')
 
-if __name__ == "__main__*":
-    
-    #taiyi.prepare_raw_data()
+    #try: from medata import medict
+    #except: medict = {}
 
-    try: from medata import medict
-    except: medict = {}
-    #scrape_and_save(taiyi.RAW_CAT_DATA, file = 'medata')
-    
-    psnd = extract_poisons()
+    #psnd = extract_poisons()
 
     for kk, dd in medict.items():
         print(kk, getMeridian(dd))

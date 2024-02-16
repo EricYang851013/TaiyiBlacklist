@@ -1250,12 +1250,13 @@ class MY_GUI():
   #### END( GUI CODE ) ####
 #############################
 
+prepare_raw_data()
 
 if __name__ == "__main__":
     # wrapData()
-    msgs = prepare_raw_data()
+    # msgs = prepare_raw_data()
     window = Tk()              #实例化出一个父窗口
-    MY_GUI(window).write_log_to_Text('\n'.join(msgs))
+    MY_GUI(window)#.write_log_to_Text('\n'.join(msgs))
     #父窗口进入事件循环，可以理解为保持窗口运行，否则界面不展示
     window.mainloop()  
     #init_window.destroy()
