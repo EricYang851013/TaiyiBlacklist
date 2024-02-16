@@ -106,8 +106,52 @@ def extract(med, cache_only=False):
 ##【药材性状】全长15~35厘米，但常缠成团。根茎细长圆柱形，直径1~2毫米，表面淡黄色或黄棕色，多有细纵根。根细小，侧生细纤须根。茎细长，有分枝，灰绿色，节明显，有的可见附生的细根。叶互生，无柄，绿色，呈狭披针形或长卵圆形，长1~2厘米，宽2~5毫米，叶缘有疏锯齿。花梗细长，花小，单生于叶腋，花冠筒内有白色茸毛。花萼5裂，裂片绿色线形。气微，味微甘而辛。
 ##【性味归经】性平，味辛。归心经、小肠经、肺经。
 ##【功效与作用】利尿消肿、清热解毒。属清热药下属分类的清热解毒药。主治：小便不利，面目浮肿；蛇虫咬伤；胃癌肠癌、食管癌、肝癌及其并发腹水等病症。
+
 EXCLUDED_KEYS = '1234567891011①②③④⑤⑥⑦⑧⑨⑩一二三四五六七八九十'
 OpenClose = '[]【】［］〖〗'
+
+def compile_key_pattern():
+    pata = r'(?m)[【［〖[]([- 、\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]+)[]】］〗]'
+    patb = r'^([\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]+)[：:]'
+    return re.compile( f'{pata}|{patb}')
+
+KEYPAT  = compile_key_pattern()
+
+def yieldKVs(text):
+    key = "" # no key yet
+    while True:
+        find = KEYPAT.search(text)
+        if not find:
+            if key: yield key, text
+            elif DBG_EXTRACT:
+                print(">> 没发现关键词:", text, file=sys.stderr)
+            break
+        i,j = find.span()
+        if key: yield key, text[:i]
+        elif i and DBG_EXTRACT:
+            print(">> 起始处无关键词:", text[:i], file=sys.stderr)
+        text = text[j:]
+        key = find.group(1) or find.group(2) # new key
+        key = re.sub(r'[ ，、]', "", key)
+        key = key.replace("性位", '性味') #e.g. 元参
+
+def parseKVs(text, entries):
+    for kwd, fext in yieldKVs(text):
+        # empty kwd included
+        if kwd in EXCLUDED_KEYS:
+            if kwd or fext:
+                if DBG_EXTRACT:
+                    print("Excluded: Key=", kwd, "Value=",
+                          fext, file=sys.stderr)
+            continue
+        if not fext or len(kwd) > 9:
+            if DBG_EXTRACT:
+                print("Bad key or value: Key=", kwd,
+                      "Value=", fext, file=sys.stderr)
+            continue
+        if '\n' in fext: fext = fext.replace('\n', ' ')
+        append_add(entries, kwd, fext)
+
 def getKVpair(text):
     find = OpenClose.find(text[0])
     if find % 2: # find = -1 included
@@ -128,6 +172,7 @@ def getKVpair(text):
     if find > 0: kwd=kwd[:find]
     kwd = re.sub(r'[ ，、]', "", kwd)
     kwd = kwd.replace("性位", '性味') #e.g. 元参
+
     text = text[cind+1:]
     find = text.find('【') # other fields?
     fext = text if find < 0 else text[:find]
@@ -156,22 +201,36 @@ def parseKVpairs(text, entries):
             continue
         append_add(entries, kwd, fext)
 
-def para_extract(soup, title):
-    entries, lines = {'from':'A+医学百科'}, []
-    # medname = '中药名' # ignore this
+def unipara_enum(soup):
+    for par in soup.find_all("p"):
+        text = par.text
+        #print(">>> DUMP:", text, file=sys.stderr)
+        find = KEYPAT.match(text)
+        if find: yield text
+
+def multipara_enum(soup):
+    lines = []
     for par in soup.find_all("p"):
         text = par.text# empty text -> end of content
         #print(">>> DUMP:", text, file=sys.stderr)
-        find = OpenClose.find(text[0]) if text else 0
-        if find % 2 == 0: # end of current field
-            merged = "".join(lines)
+        find = KEYPAT.match(text)
+        if find: # end of current field
+            merged = "\n".join(lines)
             lines = [text]
-            parseKVpairs(merged, entries)
+            yield merged
         else: lines.append(text) # extra field text
         par = par.find_next_sibling()
         if not par or par.name != 'p': # end of field
-            merged, lines = "".join(lines), []
-            parseKVpairs(merged, entries)
+            merged, lines = "\n".join(lines), []
+            yield merged
+
+# TEXT_ENUMER = multipara_enum
+TEXT_ENUMER = unipara_enum
+def para_extract(soup, title):
+    entries = {'from':'A+医学百科'}
+    for text in TEXT_ENUMER(soup):
+        parseKVs(text, entries)
+
     if '药材名' not in entries:
         entries['药材名'] = title
     elif ';;' in entries['药材名']:
@@ -182,7 +241,11 @@ def para_extract(soup, title):
         entries['药材名'] = text[:find]
     if entries['药材名'] != title:
         entries['title'] = title
+    if not entries['药材名']: #empty name
+        entries['药材名'] = title
+        
     return entries
+    
 
 # http://www.a-hospital.com/w/厚朴
 # this page contains a table that shows:
@@ -235,12 +298,13 @@ def merged_items(da, db):
         yield kk, vv
 
 def alias_enum(dd, seen = None):
-    for key in ('别名', "处方名", "异名"):
+    # "学名" 有很多是英文
+    for key in ('别名', "处方名", "异名", "又名", "名称", "学名"):
         if key not in dd: continue
         pid = dd[key].find('。')
         text = dd[key] if pid<0 else dd[key][:pid]
         for ali in re.sub(
-r'\([^)]+\)|\[[^[]+\]|（[^）]+）|《[^》]+》|［[^［]+］|[0-9);.,:：、，）]',
+r'\([^)]+\)|\[[^[]+\]|（[^）]+）|《[^》]+》|［[^［]+］|[a-zA-Z0-9();.,:：、，．（）]',
                      ' ', text).split():
             if seen is None: yield ali
             elif ali not in seen:
@@ -645,7 +709,7 @@ from pagecache import CACHE
 if __name__ == "__main__":
     medict = {}
     scrape_and_extract(cache_only=True)
-    check_and_save('medbase')
+    check_and_save('unimed')
 
     #try: from medata import medict
     #except: medict = {}
