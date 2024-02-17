@@ -202,11 +202,20 @@ def parseKVpairs(text, entries):
         append_add(entries, kwd, fext)
 
 def unipara_enum(soup):
+    just_key = "" #make special case for just a key
     for par in soup.find_all("p"):
         text = par.text
-        #print(">>> DUMP:", text, file=sys.stderr)
         find = KEYPAT.match(text)
-        if find: yield text
+        if find:
+            i,j = find.span()
+            if j == len(text):
+                just_key = text
+            else:
+                yield text
+                just_key = ""
+        elif just_key:
+            yield just_key + text
+            just_key = ""
 
 def multipara_enum(soup):
     lines = []
@@ -306,6 +315,8 @@ def alias_enum(dd, seen = None):
         for ali in re.sub(
 r'\([^)]+\)|\[[^[]+\]|（[^）]+）|《[^》]+》|［[^［]+］|[a-zA-Z0-9();.,:：、，．（）]',
                      ' ', text).split():
+            if ali in ("别名", "又名"):
+                continue
             if seen is None: yield ali
             elif ali not in seen:
                 seen.add(ali)
@@ -357,7 +368,7 @@ def save_web(medict, file):
     print(f'\n Saved to files: "{file}.py" and "{file}.md"')
 
 
-def scrape_and_extract(cache_only = False, nline=12):
+def scrape_and_save(file, cache_only = False, nline=12):
     global CACHE, medict
     try: from pagecache import CACHE
     except: CACHE = {}
@@ -381,15 +392,15 @@ def scrape_and_extract(cache_only = False, nline=12):
                 save_web(medict, file)
                 prev_len = len(CACHE)
 
+    fix_weird_values(medict)
+    save_web(medict, file)
+
     if cache_size < len(CACHE):
         with open(PAGECACHE_FILE, 'wt', encoding="utf-8") as fout:
             print("CACHE =", CACHE, file=fout)
 
-def check_and_save(file):
+def check_and_save():
     global medict
-
-    fix_weird_values(medict)
-    save_web(medict, file)
 
     with open('checkdups.md', 'wt', encoding='utf-8') as fout:
         check_duplications(medict, fout)
@@ -548,7 +559,12 @@ def check_duplications(medict, fout):
           file=fout)
 
 
-
+def count_alias_repeats(cali):
+    count = 0
+    for kk, dd in medict.items():
+        for ali in merged_alias_enum(dd):
+            if ali == cali: count += 1
+    return count
 
 ## 归经属性
 MERIDIANS = ["心", "肝", "脾", "肺", "肾", "心包", 
@@ -702,14 +718,15 @@ def extract_poison_page(i, psnd):
 ######################################
 
 from pagecache import CACHE
+#print_med('蚤休', extract('蚤休'))
 #print_med('半支莲', extract('半支莲'))
 #print_med('七里香', extract('七里香'))
 #test_extract(True)
 
 if __name__ == "__main__":
     medict = {}
-    scrape_and_extract(cache_only=True)
-    check_and_save('unimed')
+    scrape_and_save('unimed', True)
+    check_and_save()
 
     #try: from medata import medict
     #except: medict = {}
