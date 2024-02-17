@@ -205,7 +205,7 @@ def unipara_enum(soup):
     just_key = "" #make special case for just a key
     for par in soup.find_all("p"):
         text = par.text
-        find = KEYPAT.match(text)
+        find = KEYPAT.search(text)
         if find:
             i,j = find.span()
             if j == len(text):
@@ -342,12 +342,12 @@ def printData(medict, fout):
                   ) if 'paradata' in dat else dat.items():
             if kk in cols:
                 clean[kk] = vv
-            elif kk == '性味归经':
+            elif kk in ('性味归经', '性味与归经'):
                 for vs in vv.split(';;'):
                     pi = vs.find('。')
                     append_add(clean, '性味', vs[:pi+1])
                     append_add(clean, '归经', vs[pi+1:])
-            elif kk in ["功效","通用","功效与作用"]:
+            elif kk in ("功效","通用","功效与作用","功能与主治"):
                 append_add(clean, "功效作用", vv)
 
         for c, v in clean.items():
@@ -648,19 +648,7 @@ def print_med(med, dat):
             continue
         for ff, vv in vv.items():
             print(f">>【{ff}】{vv}")
-    
-def test_extract(use_cache=False):
-    global CACHE
-    if use_cache: from pagecache import CACHE
-    if 'CACHE' not in globals(): CACHE = {}
-    #【药 材 名】白牛胆【英 文 名】Sheepear Inula Her（羊耳菊）
-    for med in ('菊花参', '白牛胆', '元参','金钱桔饼','葱白',
-                "厚朴", "川朴", "羊踯躅", '禹白附', '半支莲',
-                '半边莲'):
-        print_med(med, extract(med) )
-        time.sleep(3)
 
-#test_extract()
 
 ## This part relates to poison data scraping
 
@@ -717,7 +705,20 @@ def extract_poison_page(i, psnd):
   #### END( WEB SCRAPING CODE ) ####
 ######################################
 
+def test_extract(use_cache=False):
+    global CACHE
+    if use_cache: from pagecache import CACHE
+    if 'CACHE' not in globals(): CACHE = {}
+    #【药 材 名】白牛胆【英 文 名】Sheepear Inula Her（羊耳菊）
+    for med in ('卷柏','蚤休','七里香', '菊花参', '白牛胆',
+                '元参','金钱桔饼','葱白', "厚朴", "川朴",
+                "羊踯躅", '禹白附', '半支莲', '半边莲'):
+        print_med(med, extract(med) )
+        time.sleep(3)
+
+#test_extract()
 from pagecache import CACHE
+#print_med('卷柏', extract('卷柏'))
 #print_med('蚤休', extract('蚤休'))
 #print_med('半支莲', extract('半支莲'))
 #print_med('七里香', extract('七里香'))
