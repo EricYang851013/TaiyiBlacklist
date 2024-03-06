@@ -31,6 +31,10 @@ import requests, time, re
 
 # Another good website is baike.baidu.com 
 # https://baike.baidu.com/item/褚实子
+# 中医百科
+# https://zhongyibaike.com/wiki/故纸
+# 中医世家
+# https://www.zysj.com.cn/index.html
 
 DBG_EXTRACT = False
 
@@ -701,6 +705,46 @@ def extract_poison_page(i, psnd):
         else: print("Empty name:", valu, file=sys.stderr)
         #if input("quit?"): break
 
+
+# 按分类查药	
+HERB_EFFECTS="""
+解表药 清热药 泻下药 祛风湿药 芳香化湿药 利水渗湿药 
+温里药 理气药 消导药 驱虫药 止血药 活血药 化痰止咳平喘药 
+安神药 平肝熄风药 开窍药 补益药 固涩药 外用药""".split()
+
+def extract_effect(file = 'effectinf.py'):
+    global EFFECT_CACHE
+    try: from effect_pages import EFFECT_CACHE
+    except: EFFECT_CACHE = {}
+    cache_size = len(EFFECT_CACHE)
+    effectinf = {} #effect dict
+
+    for eff in HERB_EFFECTS:
+        extract_effect_page(eff, effectinf)
+        time.sleep(5)
+
+    if cache_size < len(EFFECT_CACHE):
+        with open('effect_pages.py', 'wt', encoding='utf-8') as fout:
+            print('EFFECT_CACHE =', EFFECT_CACHE, file=fout)
+            
+    with open(file, 'wt', encoding='utf-8') as fout:
+        print('effectinf =', effectinf, file=fout)
+    return effectinf
+
+def extract_effect_page(eff, effectinf):
+    url = f'http://www.a-hospital.com/w/{eff}'
+    if url not in EFFECT_CACHE:
+        for i in range(3):
+            try: res = requests.get(url)
+            except requests.exceptions.Timeout:
+                time.sleep(20)
+                continue #retry
+            if res.status_code == 200: break
+            return # all other status_code
+        else: return # after failing 3 times
+        EFFECT_CACHE[url] = res.text #CACHE pages
+        print(url, "CACHED")
+
 ######################################
   #### END( WEB SCRAPING CODE ) ####
 ######################################
@@ -716,15 +760,17 @@ def test_extract(use_cache=False):
         print_med(med, extract(med) )
         time.sleep(3)
 
+#from pagecache import CACHE
 #test_extract()
-from pagecache import CACHE
 #print_med('卷柏', extract('卷柏'))
 #print_med('蚤休', extract('蚤休'))
 #print_med('半支莲', extract('半支莲'))
 #print_med('七里香', extract('七里香'))
 #test_extract(True)
 
-if __name__ == "__main__":
+extract_effect()
+
+if __name__ == "__main__*":
     medict = {}
     scrape_and_save('unimed', True)
     check_and_save()
